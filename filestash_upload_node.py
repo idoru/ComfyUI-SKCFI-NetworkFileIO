@@ -10,7 +10,7 @@ class FilestashUploadNode:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "filenames": ("STRING", {"multiline": True, "default": ""}),
+                "filenames": ("VHS_FILENAMES",),
                 "filestash_url": ("STRING", {"default": "http://localhost:8334"}),
                 "api_key": ("STRING", {"default": ""}),
                 "share_id": ("STRING", {"default": ""}),
@@ -27,12 +27,12 @@ class FilestashUploadNode:
     FUNCTION = "upload_files"
     CATEGORY = "file_operations"
 
-    def upload_files(self, filenames: str, filestash_url: str, api_key: str, share_id: str, upload_path: str, log_file: str = "", extra_headers: str = "") -> Tuple[str]:
+    def upload_files(self, filenames, filestash_url: str, api_key: str, share_id: str, upload_path: str, log_file: str = "", extra_headers: str = "") -> Tuple[str]:
         """
         Upload files to Filestash server with retry logic and optional failure logging
         
         Args:
-            filenames: Newline-separated list of local file paths
+            filenames: VHS_FILENAMES from VideoCombine node - tuple containing (save_output_flag, list_of_file_paths)
             filestash_url: Base URL of Filestash instance
             api_key: API key for authentication
             share_id: Share ID for the upload location
@@ -43,18 +43,36 @@ class FilestashUploadNode:
         Returns:
             String containing upload results
         """
-        if not filenames.strip():
-            return ("No filenames provided",)
+        # Extract file list from VHS_FILENAMES tuple
+        # filenames is a tuple: (save_output_flag, list_of_file_paths)
+        if not filenames or len(filenames) < 2 or not filenames[1]:
+            return ("No filenames provided from VideoCombine output",)
         
         if not api_key or not share_id:
             return ("API key and Share ID are required",)
         
-        file_list = [f.strip() for f in filenames.strip().split('\n') if f.strip()]
+        file_list = filenames[1]  # Extract the list of file paths from the VHS_FILENAMES tuple
         results = []
         failed_files = []
         
         # Parse extra headers
         headers = self._parse_headers(extra_headers)
+        
+        # Set up SSL certificate path once
+        cert_paths = [
+            '/etc/ssl/certs/ca-certificates.crt',  # Common Linux location
+            '/usr/lib/ssl/cert.pem',               # Default SSL path
+        ]
+        
+        cert_path = None
+        for path in cert_paths:
+            if os.path.exists(path):
+                cert_path = path
+                break
+        
+        # Use system default if no cert path found
+        if cert_path is None:
+            cert_path = True  # Use system default as last resort
         
         for local_file_path in file_list:
             # Check if local file exists
@@ -81,6 +99,10 @@ class FilestashUploadNode:
             upload_success = False
             last_error = None
             
+            # Create a session with proper SSL context (once per file)
+            session = requests.Session()
+            session.verify = cert_path
+            
             for attempt in range(3):
                 try:
                     # Add delay between retries (except first attempt)
@@ -88,7 +110,7 @@ class FilestashUploadNode:
                         time.sleep(1 * attempt)  # 1s, 2s delays
                     
                     with open(local_file_path, 'rb') as file:
-                        response = requests.post(
+                        response = session.post(
                             api_endpoint,
                             params=params,
                             data=file,
