@@ -1,0 +1,9 @@
+[project]
+name = "comfyui-filestash-upload"
+description = "ComfyUI custom node for uploading files to Filestash server"
+version = "1.0.0"
+dependencies = ["requests>=2.25.0"]
+requires-python = ">=3.8"
+
+[tool.comfy]
+DisplayName = "Filestash Upload Node"
