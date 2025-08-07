@@ -1,6 +1,8 @@
 import requests
 import os
+import time
 from typing import List, Tuple, Any
+from pathlib import Path
 
 
 class FilestashUploadNode:
@@ -13,6 +15,9 @@ class FilestashUploadNode:
                 "api_key": ("STRING", {"default": ""}),
                 "share_id": ("STRING", {"default": ""}),
                 "upload_path": ("STRING", {"default": "/uploads/"}),
+            },
+            "optional": {
+                "log_file": ("STRING", {"default": ""}),
             }
         }
     
@@ -21,9 +26,9 @@ class FilestashUploadNode:
     FUNCTION = "upload_files"
     CATEGORY = "file_operations"
 
-    def upload_files(self, filenames: str, filestash_url: str, api_key: str, share_id: str, upload_path: str) -> Tuple[str]:
+    def upload_files(self, filenames: str, filestash_url: str, api_key: str, share_id: str, upload_path: str, log_file: str = "") -> Tuple[str]:
         """
-        Upload files to Filestash server
+        Upload files to Filestash server with retry logic and optional failure logging
         
         Args:
             filenames: Newline-separated list of local file paths
@@ -31,6 +36,7 @@ class FilestashUploadNode:
             api_key: API key for authentication
             share_id: Share ID for the upload location
             upload_path: Destination path on Filestash server
+            log_file: Optional path to log failed uploads
         
         Returns:
             String containing upload results
@@ -43,47 +49,84 @@ class FilestashUploadNode:
         
         file_list = [f.strip() for f in filenames.strip().split('\n') if f.strip()]
         results = []
+        failed_files = []
         
         for local_file_path in file_list:
-            try:
-                # Check if local file exists
-                if not os.path.exists(local_file_path):
-                    results.append(f"ERROR: File not found: {local_file_path}")
-                    continue
-                
-                # Get filename from path
-                filename = os.path.basename(local_file_path)
-                
-                # Construct destination path
-                dest_path = upload_path.rstrip('/') + '/' + filename
-                
-                # Prepare API endpoint
-                api_endpoint = f"{filestash_url.rstrip('/')}/api/files/cat"
-                params = {
-                    'path': dest_path,
-                    'key': api_key,
-                    'share': share_id
-                }
-                
-                # Read and upload file
-                with open(local_file_path, 'rb') as file:
-                    response = requests.post(
-                        api_endpoint,
-                        params=params,
-                        data=file,
-                        timeout=30
-                    )
-                
-                if response.status_code == 200:
-                    results.append(f"SUCCESS: Uploaded {filename} to {dest_path}")
-                else:
-                    results.append(f"ERROR: Failed to upload {filename} - HTTP {response.status_code}: {response.text}")
+            # Check if local file exists
+            if not os.path.exists(local_file_path):
+                results.append(f"ERROR: File not found: {local_file_path}")
+                failed_files.append(local_file_path)
+                continue
+            
+            # Get filename from path
+            filename = os.path.basename(local_file_path)
+            
+            # Construct destination path
+            dest_path = upload_path.rstrip('/') + '/' + filename
+            
+            # Prepare API endpoint
+            api_endpoint = f"{filestash_url.rstrip('/')}/api/files/cat"
+            params = {
+                'path': dest_path,
+                'key': api_key,
+                'share': share_id
+            }
+            
+            # Attempt upload with retries
+            upload_success = False
+            last_error = None
+            
+            for attempt in range(3):
+                try:
+                    # Add delay between retries (except first attempt)
+                    if attempt > 0:
+                        time.sleep(1 * attempt)  # 1s, 2s delays
                     
-            except requests.RequestException as e:
-                results.append(f"ERROR: Network error uploading {local_file_path}: {str(e)}")
-            except Exception as e:
-                results.append(f"ERROR: Unexpected error uploading {local_file_path}: {str(e)}")
+                    with open(local_file_path, 'rb') as file:
+                        response = requests.post(
+                            api_endpoint,
+                            params=params,
+                            data=file,
+                            timeout=30
+                        )
+                    
+                    if response.status_code == 200:
+                        results.append(f"SUCCESS: Uploaded {filename} to {dest_path} (attempt {attempt + 1})")
+                        upload_success = True
+                        break
+                    else:
+                        last_error = f"HTTP {response.status_code}: {response.text}"
+                        
+                except requests.RequestException as e:
+                    last_error = f"Network error: {str(e)}"
+                except Exception as e:
+                    last_error = f"Unexpected error: {str(e)}"
+            
+            if not upload_success:
+                error_msg = f"ERROR: Failed to upload {filename} after 3 attempts - {last_error}"
+                results.append(error_msg)
+                failed_files.append(local_file_path)
+        
+        # Log failed files if log_file is specified
+        if log_file.strip() and failed_files:
+            self._log_failed_uploads(log_file.strip(), failed_files)
         
         return ('\n'.join(results),)
-
-
+    
+    def _log_failed_uploads(self, log_file_path: str, failed_files: List[str]):
+        """Log failed upload file paths to the specified log file"""
+        try:
+            # Create parent directories if they don't exist
+            log_path = Path(log_file_path)
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Append failed files to log
+            with open(log_file_path, 'a', encoding='utf-8') as f:
+                timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+                f.write(f"\n# Failed uploads at {timestamp}\n")
+                for failed_file in failed_files:
+                    f.write(f"{failed_file}\n")
+                    
+        except Exception as e:
+            # Don't fail the entire operation if logging fails
+            print(f"Warning: Could not write to log file {log_file_path}: {e}")
