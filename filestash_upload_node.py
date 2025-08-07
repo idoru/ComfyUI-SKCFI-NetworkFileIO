@@ -18,6 +18,7 @@ class FilestashUploadNode:
             },
             "optional": {
                 "log_file": ("STRING", {"default": ""}),
+                "extra_headers": ("STRING", {"multiline": True, "default": ""}),
             }
         }
     
@@ -26,7 +27,7 @@ class FilestashUploadNode:
     FUNCTION = "upload_files"
     CATEGORY = "file_operations"
 
-    def upload_files(self, filenames: str, filestash_url: str, api_key: str, share_id: str, upload_path: str, log_file: str = "") -> Tuple[str]:
+    def upload_files(self, filenames: str, filestash_url: str, api_key: str, share_id: str, upload_path: str, log_file: str = "", extra_headers: str = "") -> Tuple[str]:
         """
         Upload files to Filestash server with retry logic and optional failure logging
         
@@ -37,6 +38,7 @@ class FilestashUploadNode:
             share_id: Share ID for the upload location
             upload_path: Destination path on Filestash server
             log_file: Optional path to log failed uploads
+            extra_headers: Optional HTTP headers (one per line, format: "Header-Name: value")
         
         Returns:
             String containing upload results
@@ -50,6 +52,9 @@ class FilestashUploadNode:
         file_list = [f.strip() for f in filenames.strip().split('\n') if f.strip()]
         results = []
         failed_files = []
+        
+        # Parse extra headers
+        headers = self._parse_headers(extra_headers)
         
         for local_file_path in file_list:
             # Check if local file exists
@@ -87,6 +92,7 @@ class FilestashUploadNode:
                             api_endpoint,
                             params=params,
                             data=file,
+                            headers=headers,
                             timeout=30
                         )
                     
@@ -130,3 +136,26 @@ class FilestashUploadNode:
         except Exception as e:
             # Don't fail the entire operation if logging fails
             print(f"Warning: Could not write to log file {log_file_path}: {e}")
+    
+    def _parse_headers(self, extra_headers: str) -> dict:
+        """Parse extra headers from multiline string format"""
+        headers = {}
+        if not extra_headers.strip():
+            return headers
+        
+        for line in extra_headers.strip().split('\n'):
+            line = line.strip()
+            if not line or ':' not in line:
+                continue
+            
+            try:
+                key, value = line.split(':', 1)
+                key = key.strip()
+                value = value.strip()
+                if key and value:
+                    headers[key] = value
+            except ValueError:
+                # Skip malformed header lines
+                continue
+        
+        return headers
