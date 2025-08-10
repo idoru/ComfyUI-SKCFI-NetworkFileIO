@@ -1,6 +1,7 @@
 import requests
 import os
 import json
+import time
 from typing import Tuple, Any
 from pathlib import Path
 
@@ -51,39 +52,51 @@ class HttpUploadNode:
         # Parse headers
         parsed_headers = self._parse_headers(headers)
         
-        try:
-            filename = os.path.basename(file_path)
-            
-            # Prepare file for upload
-            with open(file_path, 'rb') as f:
-                files_data = {'file': (filename, f, 'application/octet-stream')}
+        filename = os.path.basename(file_path)
+        
+        # Attempt upload with retries
+        last_error = None
+        
+        for attempt in range(3):
+            try:
+                # Add delay between retries (except first attempt)
+                if attempt > 0:
+                    time.sleep(1 * attempt)  # 1s, 2s delays
                 
-                # Make HTTP request
-                if method.upper() == "POST":
-                    response = requests.post(
-                        url,
-                        files=files_data,
-                        headers=parsed_headers,
-                        timeout=timeout
-                    )
-                else:  # PUT
-                    response = requests.put(
-                        url,
-                        files=files_data,
-                        headers=parsed_headers,
-                        timeout=timeout
-                    )
-            
-            return (response.status_code, response.text)
-            
-        except requests.exceptions.Timeout:
-            return (408, f"Request timeout after {timeout} seconds")
-        except requests.exceptions.ConnectionError:
-            return (503, f"Connection error: Unable to connect to {url}")
-        except requests.exceptions.RequestException as e:
-            return (500, f"HTTP request error: {str(e)}")
-        except Exception as e:
-            return (500, f"Unexpected error: {str(e)}")
+                # Prepare file for upload
+                with open(file_path, 'rb') as f:
+                    files_data = {'file': (filename, f, 'application/octet-stream')}
+                    
+                    # Make HTTP request
+                    if method.upper() == "POST":
+                        response = requests.post(
+                            url,
+                            files=files_data,
+                            headers=parsed_headers,
+                            timeout=timeout
+                        )
+                    else:  # PUT
+                        response = requests.put(
+                            url,
+                            files=files_data,
+                            headers=parsed_headers,
+                            timeout=timeout
+                        )
+                
+                # Return successful response immediately
+                return (response.status_code, response.text)
+                
+            except requests.exceptions.Timeout:
+                last_error = f"Request timeout after {timeout} seconds"
+            except requests.exceptions.ConnectionError:
+                last_error = f"Connection error: Unable to connect to {url}"
+            except requests.exceptions.RequestException as e:
+                last_error = f"HTTP request error: {str(e)}"
+            except Exception as e:
+                last_error = f"Unexpected error: {str(e)}"
+        
+        # If we get here, all retries failed
+        return (500, f"Upload failed after 3 attempts - {last_error}")
     
     def _parse_headers(self, headers: str) -> dict:
         """
