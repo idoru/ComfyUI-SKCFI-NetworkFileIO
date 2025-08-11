@@ -1,15 +1,16 @@
 # ComfyUI-SKCFI-NetworkFileIO
 
-A ComfyUI custom node for uploading files to Filestash servers with robust retry logic and comprehensive configuration options.
+A ComfyUI custom node package for uploading files to various destinations with robust retry logic and comprehensive configuration options.
 
 ## Features
 
-- **Batch file uploads** to Filestash servers via REST API
+- **Single file uploads** to Filestash servers and generic HTTP endpoints
 - **Retry logic** with 3 attempts and progressive backoff delays (1s, 2s)
 - **Custom HTTP headers** support for authentication and request customization
 - **Failed upload logging** with automatic directory creation
 - **Comprehensive error handling** with detailed feedback
 - **ComfyUI integration** with proper node structure and UI
+- **Status code and response text outputs** for workflow integration
 
 ## Installation
 
@@ -42,12 +43,16 @@ A ComfyUI custom node for uploading files to Filestash servers with robust retry
 
 ## Usage
 
-After installation, you'll find the **"Filestash File Upload"** node under the **"file_operations"** category in ComfyUI.
+After installation, you'll find two nodes under the **"file_operations"** category in ComfyUI:
+- **"Filestash File Upload"** - Upload to Filestash servers
+- **"HTTP File Upload"** - Upload to generic HTTP endpoints
 
-### Node Parameters
+## Filestash File Upload Node
+
+### Parameters
 
 #### Required Inputs:
-- **`filenames`** - Newline-separated list of local file paths to upload
+- **`file_path`** - Path to the single file to upload
 - **`filestash_url`** - Base URL of your Filestash instance (e.g., `https://files.example.com`)
 - **`api_key`** - API key for Filestash authentication
 - **`share_id`** - Share ID for the target upload location
@@ -57,17 +62,32 @@ After installation, you'll find the **"Filestash File Upload"** node under the *
 - **`log_file`** - Path to log failed uploads (creates directories automatically if needed)
 - **`extra_headers`** - Custom HTTP headers, one per line in format `Header-Name: value`
 
-#### Output:
-- **`upload_results`** - Detailed results string showing success/failure for each file
+#### Outputs:
+- **`status_code`** - HTTP status code from the upload response (INT)
+- **`result_text`** - Response body or error message (STRING)
 
-### Example Usage
+## HTTP File Upload Node
 
+### Parameters
+
+#### Required Inputs:
+- **`file_path`** - Path to the single file to upload
+- **`url`** - Target URL for the HTTP request
+- **`method`** - HTTP method (POST or PUT)
+
+#### Optional Inputs:
+- **`headers`** - HTTP headers in JSON format or multiline key:value format
+- **`timeout`** - Request timeout in seconds (default: 30)
+
+#### Outputs:
+- **`status_code`** - HTTP status code from the upload response (INT)
+- **`result_text`** - Response body or error message (STRING)
+
+## Example Usage
+
+### Filestash Upload
 ```
-Filenames:
-/path/to/file1.jpg
-/path/to/file2.png
-/tmp/generated_image.jpg
-
+File Path: /tmp/generated_image.jpg
 Filestash URL: https://files.myserver.com
 API Key: your_api_key_here
 Share ID: ABC123
@@ -78,6 +98,22 @@ Extra Headers:
 User-Agent: ComfyUI-Workflow/1.0
 X-Source: automated-upload
 Authorization: Bearer additional_token
+```
+
+### HTTP Upload  
+```
+File Path: /tmp/generated_video.mp4
+URL: https://api.example.com/upload
+Method: POST
+Timeout: 60
+
+Headers (JSON format):
+{"Authorization": "Bearer token123", "Content-Type": "video/mp4"}
+
+Headers (key:value format):
+Authorization: Bearer token123
+User-Agent: ComfyUI-Workflow/1.0
+X-Upload-Source: comfyui
 ```
 
 ## Configuration
@@ -97,18 +133,27 @@ Use the `extra_headers` parameter for:
 - **Content-Type override**: `Content-Type: image/jpeg`
 
 ### Error Handling
-The node implements robust error handling:
+Both nodes implement robust error handling:
 - **File validation** - Checks if local files exist before upload
-- **3-attempt retry** - Automatic retries with exponential backoff
-- **Detailed logging** - Failed uploads logged with timestamps
-- **Graceful degradation** - Continues processing remaining files on individual failures
+- **3-attempt retry** - Automatic retries with exponential backoff (1s, 2s delays)
+- **Detailed logging** - Failed uploads logged with timestamps (Filestash node only)
+- **Status code returns** - HTTP response codes for workflow decision making
+- **Comprehensive error messages** - Detailed error information in result_text
 
 ## API Compatibility
 
-This node is designed for Filestash servers and uses the `/api/files/cat` endpoint for uploads. Ensure your Filestash instance supports:
+### Filestash Upload Node
+Designed for Filestash servers using the `/api/files/cat` endpoint. Ensure your Filestash instance supports:
 - POST requests to `/api/files/cat`
 - Query parameters: `path`, `key`, `share`
 - Binary file data in request body
+
+### HTTP Upload Node
+Generic HTTP upload node that supports:
+- POST and PUT methods
+- Multipart form-data uploads (field name: `file`)
+- Custom headers and timeouts
+- Any HTTP endpoint accepting file uploads
 
 ## Troubleshooting
 
@@ -172,9 +217,17 @@ For issues and questions:
 
 ## Changelog
 
+### v2.0.0
+- **BREAKING**: Changed to single file upload per node for better workflow control
+- **BREAKING**: Updated return types to (status_code, result_text) instead of upload_results string
+- Added new HTTP File Upload node for generic endpoints
+- Both nodes now return consistent status_code and result_text outputs
+- Maintained retry logic and error handling
+- Updated documentation and examples
+
 ### v1.0.0
 - Initial release
-- Batch file upload functionality
+- Batch file upload functionality (deprecated in v2.0.0)
 - Retry logic with exponential backoff
 - Custom HTTP headers support
 - Failed upload logging
