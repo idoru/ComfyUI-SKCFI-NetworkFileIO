@@ -7,7 +7,7 @@ from typing import Tuple, Dict, Any
 from pathlib import Path
 
 
-class MultipartVideoFilesHTTPRequestNode:
+class MultipartFileHTTPUploadNode:
     @classmethod
     def INPUT_TYPES(cls):
         return {
