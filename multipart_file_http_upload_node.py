@@ -3,11 +3,66 @@ import os
 import json
 import time
 import mimetypes
-from typing import Tuple, Dict, Any
+import socket
+import urllib.parse
+import ssl
+import subprocess
+from typing import Tuple, Dict, Any, Optional
 from pathlib import Path
 
 
 class MultipartFileHTTPUploadNode:
+    @classmethod
+    def _get_system_ca_bundle(cls) -> Optional[str]:
+        """
+        Dynamically discover the system certificate bundle location.
+
+        Returns:
+            Path to system CA bundle, or None if not found
+        """
+        # Method 1: Use Python's SSL module to get default verify paths
+        try:
+            verify_paths = ssl.get_default_verify_paths()
+
+            # Check cafile first (single bundle file)
+            if verify_paths.cafile and os.path.exists(verify_paths.cafile):
+                return verify_paths.cafile
+
+            # Check OpenSSL cafile
+            if verify_paths.openssl_cafile and os.path.exists(verify_paths.openssl_cafile):
+                return verify_paths.openssl_cafile
+
+        except Exception:
+            pass
+
+        # Method 2: Query OpenSSL binary directly
+        try:
+            result = subprocess.run(['openssl', 'version', '-d'],
+                                  capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                # Extract path from: OPENSSLDIR: "/usr/lib/ssl"
+                openssldir = result.stdout.strip().split('"')[1]
+                ca_bundle = os.path.join(openssldir, 'cert.pem')
+                if os.path.exists(ca_bundle):
+                    return ca_bundle
+        except Exception:
+            pass
+
+        # Method 3: Check common system locations
+        common_locations = [
+            '/etc/ssl/certs/ca-certificates.crt',  # Debian/Ubuntu
+            '/etc/pki/tls/certs/ca-bundle.crt',    # RHEL/CentOS
+            '/etc/ssl/ca-bundle.pem',              # openSUSE
+            '/usr/local/share/certs/ca-root-nss.crt',  # FreeBSD
+            '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem',  # RHEL 7+
+        ]
+
+        for location in common_locations:
+            if os.path.exists(location):
+                return location
+
+        return None
+
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -81,6 +136,9 @@ class MultipartFileHTTPUploadNode:
             # Sanitize error message to avoid exposing secret file contents
             return (400, f"Header parsing error - check configuration")
 
+        # Get system certificate bundle for proper SSL verification
+        system_ca_bundle = self._get_system_ca_bundle()
+
         # Detect MIME type
         mime_type, _ = mimetypes.guess_type(file_path)
         if mime_type is None:
@@ -109,6 +167,7 @@ class MultipartFileHTTPUploadNode:
                             files=files_data,
                             headers=parsed_headers,
                             timeout=timeout,
+                            verify=system_ca_bundle if system_ca_bundle else True,
                         )
                     else:  # PUT
                         response = requests.put(
@@ -116,10 +175,16 @@ class MultipartFileHTTPUploadNode:
                             files=files_data,
                             headers=parsed_headers,
                             timeout=timeout,
+                            verify=system_ca_bundle if system_ca_bundle else True,
                         )
 
-                # Return successful response immediately
-                return (response.status_code, response.text)
+                # Check if response indicates success (2xx status codes)
+                if 200 <= response.status_code < 300:
+                    return (response.status_code, response.text)
+                else:
+                    # Treat HTTP errors as failures that should trigger retry
+                    last_error = f"HTTP {response.status_code}: {response.text[:200]}"
+                    continue
 
             except requests.exceptions.Timeout:
                 last_error = f"Request timeout after {timeout} seconds"
